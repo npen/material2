@@ -79,7 +79,7 @@ export const MAT_DRAWER_DEFAULT_AUTOSIZE =
   encapsulation: ViewEncapsulation.None,
   preserveWhitespaces: false,
 })
-export class MatDrawerContent implements AfterContentInit {
+export class MatDrawerContent implements AfterContentInit, OnDestroy {
   /**
    * Margins to be applied to the content. These are used to push / shrink the drawer content when a
    * drawer is open. We use margin rather than transform even for push mode because transform breaks
@@ -87,16 +87,24 @@ export class MatDrawerContent implements AfterContentInit {
    */
   _margins: {left: number|null, right: number|null} = {left: null, right: null};
 
+  /** Emits when the component is destroyed. */
+  private _destroyed = new Subject<void>();
+
   constructor(
       private _changeDetectorRef: ChangeDetectorRef,
       @Inject(forwardRef(() => MatDrawerContainer)) private _container: MatDrawerContainer) {
   }
 
   ngAfterContentInit() {
-    this._container._contentMargins.subscribe(margins => {
+    this._container._contentMargins.pipe(takeUntil(this._destroyed)).subscribe(margins => {
       this._margins = margins;
       this._changeDetectorRef.markForCheck();
     });
+  }
+
+  ngOnDestroy(): void {
+    this._destroyed.next();
+    this._destroyed.complete();
   }
 }
 
@@ -147,6 +155,9 @@ export class MatDrawer implements AfterContentInit, AfterContentChecked, OnDestr
 
   /** Whether the drawer is initialized. Used for disabling the initial animation. */
   private _enableAnimations = false;
+
+  /** Emits when the component is destroyed. */
+  private _destroyed = new Subject<void>();
 
   /** The side that the drawer is attached to. */
   @Input()
@@ -264,7 +275,7 @@ export class MatDrawer implements AfterContentInit, AfterContentChecked, OnDestr
               private _platform: Platform,
               @Optional() @Inject(DOCUMENT) private _doc: any) {
 
-    this.openedChange.subscribe((opened: boolean) => {
+    this.openedChange.pipe(takeUntil(this._destroyed)).subscribe((opened: boolean) => {
       if (opened) {
         if (this._doc) {
           this._elementFocusedBeforeDrawerWasOpened = this._doc.activeElement as HTMLElement;
@@ -325,6 +336,8 @@ export class MatDrawer implements AfterContentInit, AfterContentChecked, OnDestr
   }
 
   ngOnDestroy() {
+    this._destroyed.next();
+    this._destroyed.complete();
     if (this._focusTrap) {
       this._focusTrap.destroy();
     }
@@ -490,14 +503,15 @@ export class MatDrawerContainer implements AfterContentInit, OnDestroy {
     // If a `Dir` directive exists up the tree, listen direction changes and update the left/right
     // properties to point to the proper start/end.
     if (_dir != null) {
-      _dir.change.pipe(takeUntil(this._destroyed)).subscribe(() => this._validateDrawers());
+      // This seems ok, however commenting it makes the leak disappear?!
+      // _dir.change.pipe(takeUntil(this._destroyed)).subscribe(() => this._validateDrawers());
     }
 
     this._autosize = defaultAutosize;
   }
 
   ngAfterContentInit() {
-    this._drawers.changes.pipe(startWith(null)).subscribe(() => {
+    this._drawers.changes.pipe(takeUntil(this._destroyed)).pipe(startWith(null)).subscribe(() => {
       this._validateDrawers();
 
       this._drawers.forEach((drawer: MatDrawer) => {
@@ -552,7 +566,7 @@ export class MatDrawerContainer implements AfterContentInit, OnDestroy {
    */
   private _watchDrawerToggle(drawer: MatDrawer): void {
     drawer._animationStarted.pipe(
-      takeUntil(this._drawers.changes),
+      takeUntil(merge(this._drawers.changes, this._destroyed)),
       filter((event: AnimationEvent) => event.fromState !== event.toState)
     )
     .subscribe((event: AnimationEvent) => {
@@ -567,7 +581,7 @@ export class MatDrawerContainer implements AfterContentInit, OnDestroy {
     });
 
     if (drawer.mode !== 'side') {
-      drawer.openedChange.pipe(takeUntil(this._drawers.changes)).subscribe(() =>
+      drawer.openedChange.pipe(takeUntil(merge(this._drawers.changes, this._destroyed))).subscribe(() =>
           this._setContainerClass(drawer.opened));
     }
   }
@@ -582,7 +596,7 @@ export class MatDrawerContainer implements AfterContentInit, OnDestroy {
     }
     // NOTE: We need to wait for the microtask queue to be empty before validating,
     // since both drawers may be swapping positions at the same time.
-    drawer.onPositionChanged.pipe(takeUntil(this._drawers.changes)).subscribe(() => {
+    drawer.onPositionChanged.pipe(takeUntil(merge(this._drawers.changes, this._destroyed))).subscribe(() => {
       this._ngZone.onMicrotaskEmpty.asObservable().pipe(take(1)).subscribe(() => {
         this._validateDrawers();
       });
